@@ -1,7 +1,8 @@
 #!/bin/bash
 
+# Copyright (c) 2014 Dennis Schridde
 # Copyright (c) 2013 Aaron Lasseigne
-# 
+#
 # Permission is hereby granted, free of charge, to any person
 # obtaining a copy of this software and associated documentation
 # files (the "Software"), to deal in the Software without
@@ -10,10 +11,10 @@
 # copies of the Software, and to permit persons to whom the
 # Software is furnished to do so, subject to the following
 # conditions:
-# 
+#
 # The above copyright notice and this permission notice shall be
 # included in all copies or substantial portions of the Software.
-# 
+#
 # THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
 # EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
 # OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
@@ -25,24 +26,64 @@
 
 HEART='♥'
 
-if [[ `uname` == 'Linux' ]]; then
-  current_charge=$(cat /proc/acpi/battery/BAT1/state | grep 'remaining capacity' | awk '{print $3}')
-  total_charge=$(cat /proc/acpi/battery/BAT1/info | grep 'last full capacity' | awk '{print $4}')
+SLOTS_MAX=10
+SLOTS_WARNING=5
+SLOTS_CRITICAL=3
+
+BATTERY=BAT1
+
+while [ $# -gt 0 ] ; do
+	case $1 in
+		percent) unset HEART ; SLOTS_MAX=100 ; SLOTS_WARNING=50 ; SLOTS_CRITICAL=30 ;;
+		slots_max=*) SLOTS_MAX=${1##slots_max=} ;;
+		slots_warning=*) SLOTS_WARNING=${1##slots_warning=} ;;
+		slots_critical=*) SLOTS_CRITICAL=${1##slots_critical=} ;;
+		battery=*) BATTERY=${1##battery=} ;;
+	esac
+	shift
+done
+
+if [[ $(uname) == 'Linux' ]] ; then
+	current_charge=$(sed -nre '/^remaining capacity:/s/.*:\s+([0-9]+)\s*.*/\1/p' /proc/acpi/battery/${BATTERY}/state)
+	total_charge=$(sed -nre '/^last full capacity:/s/.*:\s*([0-9]+)\s*.*/\1/p' /proc/acpi/battery/${BATTERY}/info)
+	charging=$(sed -nre '/^charging state:/s/.*:\s*(\S+)\s*/\1/p' /proc/acpi/battery/${BATTERY}/state)
 else
-  battery_info=`ioreg -rc AppleSmartBattery`
-  current_charge=$(echo $battery_info | grep -o '"CurrentCapacity" = [0-9]\+' | awk '{print $3}')
-  total_charge=$(echo $battery_info | grep -o '"MaxCapacity" = [0-9]\+' | awk '{print $3}')
+	battery_info=$(ioreg -rc AppleSmartBattery)
+	current_charge=$(echo $battery_info | grep -o '"CurrentCapacity" = [0-9]\+' | awk '{print $3}')
+	total_charge=$(echo $battery_info | grep -o '"MaxCapacity" = [0-9]\+' | awk '{print $3}')
 fi
 
-charged_slots=$(echo "(($current_charge/$total_charge)*10)+1" | bc -l | cut -d '.' -f 1)
-if [[ $charged_slots -gt 10 ]]; then
-  charged_slots=10
+charged_slots=$(( ${current_charge} * 100 / ${total_charge} * ${SLOTS_MAX} / 100 ))
+if [[ ${charged_slots} -gt ${SLOTS_MAX} ]] ; then
+	charged_slots=${SLOTS_MAX}
 fi
 
-echo -n '#[fg=red]'
-for i in `seq 1 $charged_slots`; do echo -n "$HEART"; done
-
-if [[ $charged_slots -lt 10 ]]; then
-  echo -n '#[fg=white]'
-  for i in `seq 1 $(echo "10-$charged_slots" | bc)`; do echo -n "$HEART"; done
+if [[ "${HEART}" ]] ; then
+	if [ "${charged_slots}" -lt "${SLOTS_CRITICAL}" ] ; then
+		echo -n '#[fg=red,blink]'
+	else
+		echo -n '#[fg=red]'
+	fi
+	for i in $(seq 1 ${charged_slots}) ; do
+		echo -n "${HEART}"
+	done
+	echo -n '#[fg=white,noblink]'
+	for i in $(seq 1 $(( ${SLOTS_MAX} - ${charged_slots} ))) ; do
+		echo -n "${HEART}"
+	done
+else
+	if [ "${charged_slots}" -lt "${SLOTS_CRITICAL}" ] ; then
+		echo -n '#[fg=red,blink]'
+	elif [ "${charged_slots}" -lt "${SLOTS_WARNING}" ] ; then
+		echo -n '#[fg=yellow]'
+	else
+		echo -n '#[fg=green]'
+	fi
+	case "${charging}" in
+		discharging) echo -n '-' ;;
+		charging) echo -n '+' ;;
+		charged) echo -n '=' ;;
+		*) ;;
+	esac
+	echo -n "${charged_slots}%#[noblink]"
 fi
